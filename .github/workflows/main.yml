@@ -1,0 +1,64 @@
+name: Deploy to VPS
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install dependencies (locally for testing)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          pip install -r requirements.txt
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_IP }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            # Clone/update repo on VPS
+            if [ ! -d "cosmicpaisa" ]; then
+              git clone https://github.com/cosmichackerx/cosmicpaisa.git
+            else
+              cd cosmicpaisa
+              git pull origin main
+            fi
+
+            # Install dependencies
+            sudo apt-get update -y
+            sudo apt-get install -y tesseract-ocr python3-pip
+            pip3 install -r cosmicpaisa/requirements.txt
+
+            # Restart Flask app (using systemd for 24/7 uptime)
+            sudo bash -c 'cat > /etc/systemd/system/cosmicpaisa.service <<EOF
+            [Unit]
+            Description=CosmicPaisa Flask App
+            After=network.target
+
+            [Service]
+            User=${{ secrets.VPS_USERNAME }}
+            WorkingDirectory=/home/${{ secrets.VPS_USERNAME }}/cosmicpaisa
+            ExecStart=/usr/bin/python3 /home/${{ secrets.VPS_USERNAME }}/cosmicpaisa/app.py
+            Restart=always
+            RestartSec=10
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF'
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable cosmicpaisa.service
+            sudo systemctl restart cosmicpaisa.service
+
+      - name: Get Live URL
+        run: |
+          echo "Your site is now live at: http://${{ secrets.VPS_IP }}:5000"
+          echo "For production, configure Nginx/Apache and a domain."
